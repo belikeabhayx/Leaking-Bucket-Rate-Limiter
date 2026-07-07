@@ -8,6 +8,7 @@ import { createInitialState } from "@/domain/bucket/bucket-state";
 import { consume } from "@/domain/bucket/leaky-bucket";
 import { ok, err, isOk } from "@/domain/types/result";
 import { storageError } from "@/domain/errors/rate-limit-error";
+import { RedisLuaStore } from "@/lib/storage/redis-lua-store";
 
 export interface CheckLimitResult {
   readonly allowed: boolean;
@@ -21,12 +22,29 @@ export class RateLimiterService {
     private readonly store: BucketStore,
     private readonly clock: Clock,
     private readonly config: BucketConfig,
-  ) {}
+    private readonly lua?: RedisLuaStore,  // optional fast path
+  ) { }
 
   async checkLimit(
     id: BucketId,
     units: number = 1,
   ): Promise<Result<CheckLimitResult, RateLimitError>> {
+
+    // ── Atomic fast path (Redis + Lua) ──────────────────────────────
+    if (this.lua) {
+      const now = this.clock.now();
+      const result = await this.lua.atomicConsume(id, this.config, units, now);
+      if (!isOk(result)) return err(result.error);
+      return ok({
+        allowed: true,
+        currentLevel: result.value.waterLevel,
+        capacity: result.value.capacity,
+        retryAfterMs: null,
+      })
+
+    }
+
+    // ── Standard path (MemoryStore / non-atomic) ─────────────────────
     const now = this.clock.now();
 
     const getResult = await this.store.get(id);
