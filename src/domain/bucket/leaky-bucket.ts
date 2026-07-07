@@ -11,12 +11,14 @@ export interface ConsumeResult {
   readonly waitedMs: number;
 }
 
+// Calculates how many units have drained since lastLeakTimestamp.
 export function computeLeak(state: BucketState, now: Timestamp): number {
   const elapsedMs = now - state.lastLeakTimestamp;
   if (elapsedMs <= 0) return 0;
   return Math.min(state.waterLevel, elapsedMs * state.config.leakRatePerMs);
 }
 
+// applyLeak — pure state transition Takes old state, returns new state. Never mutates. 
 export function applyLeak(state: BucketState, now: Timestamp): BucketState {
   const leaked = computeLeak(state, now);
   return {
