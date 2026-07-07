@@ -9,6 +9,7 @@ import { consume } from "@/domain/bucket/leaky-bucket";
 import { ok, err, isOk } from "@/domain/types/result";
 import { storageError } from "@/domain/errors/rate-limit-error";
 import { RedisLuaStore } from "@/lib/storage/redis-lua-store";
+import { bucketEvents } from "@/lib/events";
 
 export interface CheckLimitResult {
   readonly allowed: boolean;
@@ -34,14 +35,29 @@ export class RateLimiterService {
     if (this.lua) {
       const now = this.clock.now();
       const result = await this.lua.atomicConsume(id, this.config, units, now);
-      if (!isOk(result)) return err(result.error);
+      if (!isOk(result)) {
+        if (result.error.kind === "BucketOverflow") {
+          bucketEvents.emit("update", {
+            bucketId: id,
+            waterLevel: result.error.currentLevel,
+            capacity: result.error.capacity,
+            timestamp: now,
+          });
+        }
+        return err(result.error);
+      }
+      bucketEvents.emit("update", {
+        bucketId: id,
+        waterLevel: result.value.waterLevel,
+        capacity: result.value.capacity,
+        timestamp: now,
+      });
       return ok({
         allowed: true,
         currentLevel: result.value.waterLevel,
         capacity: result.value.capacity,
         retryAfterMs: null,
-      })
-
+      });
     }
 
     // ── Standard path (MemoryStore / non-atomic) ─────────────────────
@@ -58,6 +74,12 @@ export class RateLimiterService {
 
     if (!isOk(consumeResult)) {
       const overflow = consumeResult.error;
+      bucketEvents.emit("update", {
+        bucketId: id,
+        waterLevel: overflow.currentLevel,
+        capacity: overflow.capacity,
+        timestamp: now,
+      });
       // Attach the real BucketId before returning to caller
       return err({ ...overflow, bucketId: id });
     }
@@ -66,6 +88,13 @@ export class RateLimiterService {
     if (!isOk(setResult)) {
       return err(storageError("write", setResult.error));
     }
+
+    bucketEvents.emit("update", {
+      bucketId: id,
+      waterLevel: consumeResult.value.nextState.waterLevel,
+      capacity: this.config.capacity,
+      timestamp: now,
+    });
 
     return ok({
       allowed: true,

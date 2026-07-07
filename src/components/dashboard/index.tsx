@@ -83,28 +83,32 @@ export default function Dashboard() {
     };
   }, [isSimulating, leakRatePerSec, mode]);
 
-  // Polling Server State (Live API Mode only)
+  // Stream Server State via SSE (Live API Mode only)
   useEffect(() => {
     if (mode !== "api" || !isSimulating) return;
 
-    const interval = setInterval(async () => {
+    logApi("Connecting to live Server-Sent Events (SSE) stream...");
+    const eventSource = new EventSource("/api/rate-limit/stream?bucketId=dashboard-bucket");
+
+    eventSource.addEventListener("update", (e) => {
       try {
-        const res = await fetch("/api/rate-limit?bucketId=dashboard-bucket");
-        if (!res.ok) throw new Error("Failed to fetch state");
-        const data = await res.json();
-
-        if (data.empty) {
-          setWaterLevel(0);
-        } else {
-          setWaterLevel(data.currentLevel);
-        }
+        const data = JSON.parse(e.data);
+        setWaterLevel(data.waterLevel);
       } catch (err) {
-        logApi(`State poll error: ${(err as Error).message}`);
+        logApi(`SSE Parse error: ${(err as Error).message}`);
       }
-    }, 200);
+    });
 
-    return () => clearInterval(interval);
+    eventSource.onerror = () => {
+      logApi("SSE Connection error. Reconnecting...");
+    };
+
+    return () => {
+      logApi("Disconnecting from SSE stream.");
+      eventSource.close();
+    };
   }, [mode, isSimulating]);
+
 
   // Request dispatch handler
   const handleRequest = async (units: number) => {
