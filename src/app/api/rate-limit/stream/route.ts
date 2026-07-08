@@ -6,6 +6,7 @@ import { isOk } from "@/domain/types/result";
 import { toBucketId } from "@/domain/types/brand";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest): Promise<Response> {
   const bucketId = toBucketId(req.nextUrl.searchParams.get("bucketId") ?? "default");
@@ -26,15 +27,19 @@ export async function GET(req: NextRequest): Promise<Response> {
 
       // 1. Send initial state immediately
       const initialResult = await rateLimiterService.getState(bucketId);
+      const config = rateLimiterService.config;
+      const leakRatePerSec = config.leakRatePerMs * 1000;
       if (isOk(initialResult) && initialResult.value) {
         sendEvent("update", {
           waterLevel: initialResult.value.currentLevel,
           capacity: initialResult.value.capacity,
+          leakRatePerSec,
         });
       } else {
         sendEvent("update", {
           waterLevel: 0,
-          capacity: 20, // default placeholder
+          capacity: config.capacity,
+          leakRatePerSec,
         });
       }
 
@@ -44,6 +49,7 @@ export async function GET(req: NextRequest): Promise<Response> {
           sendEvent("update", {
             waterLevel: payload.waterLevel,
             capacity: payload.capacity,
+            leakRatePerSec,
           });
         }
       };
@@ -54,11 +60,12 @@ export async function GET(req: NextRequest): Promise<Response> {
         const stateResult = await rateLimiterService.getState(bucketId);
         if (isOk(stateResult)) {
           if (stateResult.value === null) {
-            sendEvent("update", { waterLevel: 0, capacity: 20 });
+            sendEvent("update", { waterLevel: 0, capacity: config.capacity, leakRatePerSec });
           } else {
             sendEvent("update", {
               waterLevel: stateResult.value.currentLevel,
               capacity: stateResult.value.capacity,
+              leakRatePerSec,
             });
           }
         }
@@ -82,6 +89,7 @@ export async function GET(req: NextRequest): Promise<Response> {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
     },
   });
 }

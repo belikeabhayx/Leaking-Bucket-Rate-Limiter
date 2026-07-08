@@ -6,6 +6,7 @@ import { rateLimiterService } from "@/lib/singleton";
 import { isOk } from "@/domain/types/result";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const body = await req.json().catch(() => ({})) as Record<string, unknown>;
@@ -58,5 +59,32 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 
-  return NextResponse.json(result.value ?? { empty: true }, { status: 200 });
+  const config = rateLimiterService.config;
+  const capacity = config.capacity;
+  const leakRatePerSec = config.leakRatePerMs * 1000;
+
+  if (result.value === null) {
+    return NextResponse.json({
+      currentLevel: 0,
+      capacity,
+      leakRatePerSec,
+    }, { status: 200 });
+  }
+
+  return NextResponse.json({
+    currentLevel: result.value.currentLevel,
+    capacity: result.value.capacity,
+    leakRatePerSec,
+  }, { status: 200 });
+}
+
+export async function DELETE(req: NextRequest): Promise<NextResponse> {
+  const id = toBucketId(req.nextUrl.searchParams.get("bucketId") ?? "default");
+  const result = await rateLimiterService.reset(id);
+
+  if (!isOk(result)) {
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  }
+
+  return NextResponse.json({ success: true }, { status: 200 });
 }

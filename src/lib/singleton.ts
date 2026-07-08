@@ -1,4 +1,5 @@
 import { MemoryStore } from "@/lib/storage/memory-store";
+import { createRedisStore } from "@/lib/storage/redis-store";
 import { systemClock } from "@/lib/clock/system-clock";
 import { parseEnvConfig } from "@/lib/config/config-parser";
 import { RateLimiterService } from "@/services/rate-limiter-service";
@@ -18,11 +19,20 @@ function buildService(): RateLimiterService {
   if (process.env["REDIS_URL"]) {
     console.log("[singleton] Redis detected — using RedisLuaStore (atomic)");
     const lua = createRedisLuaStore(process.env["REDIS_URL"]);
-    return new RateLimiterService(new MemoryStore(), systemClock, config, lua);
+    const store = createRedisStore(process.env["REDIS_URL"]);
+    return new RateLimiterService(store, systemClock, config, lua);
   }
 
   console.log("[singleton] No REDIS_URL — using MemoryStore (dev mode)");
   return new RateLimiterService(new MemoryStore(), systemClock, config);
 }
 
-export const rateLimiterService = buildService();
+const globalForRateLimiter = globalThis as unknown as {
+  rateLimiterService?: RateLimiterService;
+};
+
+export const rateLimiterService = globalForRateLimiter.rateLimiterService ?? buildService();
+
+if (process.env["NODE_ENV"] !== "production") {
+  globalForRateLimiter.rateLimiterService = rateLimiterService;
+}

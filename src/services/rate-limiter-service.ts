@@ -5,7 +5,7 @@ import type { Clock } from "@/lib/clock/clock";
 import type { RateLimitError } from "@/domain/errors/rate-limit-error";
 import type { Result } from "@/domain/types/result";
 import { createInitialState } from "@/domain/bucket/bucket-state";
-import { consume } from "@/domain/bucket/leaky-bucket";
+import { consume, applyLeak } from "@/domain/bucket/leaky-bucket";
 import { ok, err, isOk } from "@/domain/types/result";
 import { storageError } from "@/domain/errors/rate-limit-error";
 import { RedisLuaStore } from "@/lib/storage/redis-lua-store";
@@ -22,7 +22,7 @@ export class RateLimiterService {
   constructor(
     private readonly store: BucketStore,
     private readonly clock: Clock,
-    private readonly config: BucketConfig,
+    public readonly config: BucketConfig,
     private readonly lua?: RedisLuaStore,  // optional fast path
   ) { }
 
@@ -111,12 +111,27 @@ export class RateLimiterService {
     }
     if (getResult.value === null) return ok(null);
 
-    const state = getResult.value;
+    const now = this.clock.now();
+    const state = applyLeak(getResult.value, now);
     return ok({
       allowed: true,
       currentLevel: state.waterLevel,
       capacity: state.config.capacity,
       retryAfterMs: null,
     });
+  }
+
+  async reset(id: BucketId): Promise<Result<void, RateLimitError>> {
+    const result = await this.store.delete(id);
+    if (!isOk(result)) {
+      return err(storageError("delete", result.error));
+    }
+    bucketEvents.emit("update", {
+      bucketId: id,
+      waterLevel: 0,
+      capacity: this.config.capacity,
+      timestamp: this.clock.now(),
+    });
+    return ok(undefined);
   }
 }
