@@ -8,8 +8,8 @@ import { isOk } from "@/domain/types/result";
 import { toCapacity, toLeakRate } from "@/domain/types/brand";
 
 const DEFAULT_CONFIG = {
-  capacity: toCapacity(10),
-  leakRatePerMs: toLeakRate(0.01),
+  capacity: toCapacity(20),
+  leakRatePerMs: toLeakRate(0.002),
 };
 
 function buildService(): RateLimiterService {
